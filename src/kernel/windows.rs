@@ -13,9 +13,7 @@ use winapi::um::winbase::STD_OUTPUT_HANDLE;
 use winapi::um::processenv::GetStdHandle;
 use winapi::shared::minwindef::{ DWORD, TRUE };
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
-
 use std::process::ExitStatus;
-
 use empty::Empty;
 
 pub unsafe fn clear_screen() {

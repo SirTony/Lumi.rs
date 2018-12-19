@@ -1,6 +1,7 @@
 use std::io::{ Read, Write, Result, Error, ErrorKind };
 use std::boxed::Box;
-use std::process::{ Command, Stdio, ExitStatus };
+use std::process::{ Command, Stdio };
+use std::env::{ VarError, var, set_var };
 use kernel::get_exit_code;
 
 #[derive( Debug )]
@@ -35,7 +36,7 @@ pub enum ShellSegment {
     Interp( Box<ShellSegment> ),
     Pipe( Box<ShellSegment>, Box<ShellSegment> ),
     Seq( bool, Box<ShellSegment>, Box<ShellSegment> ),
-    Var( Option<String>, String ),
+    Var( String ),
 }
 
 impl ShellSegment {
@@ -63,7 +64,35 @@ impl ShellSegment {
                 }
 
                 Ok( left )
-            }
+            },
+            ShellSegment::Var( name ) => {
+                match input {
+                    Some( x ) => {
+                        let value = x.join( " " );
+                        set_var( name, &value );
+                        ShellResult::ok_with_text( value )
+                    },
+
+                    None => match var( name ) {
+                        Ok( value ) => ShellResult::ok_with_text( value ),
+                        Err( e ) => match e {
+                            VarError::NotPresent => Err(
+                                Error::new(
+                                    ErrorKind::Other,
+                                    format!( "variable '{}' not found", name )
+                                )
+                            ),
+
+                            VarError::NotUnicode( _ ) => Err(
+                                Error::new(
+                                    ErrorKind::Other,
+                                    format!( "variable '{}' contains invalid data", name )
+                                )
+                            )
+                        }
+                    },
+                }
+            },
             ShellSegment::Command( cmd, args ) => {
                 let mut proc = Command::new( cmd );
 
@@ -142,9 +171,7 @@ impl ShellSegment {
                         stderr: None
                     } )
                 }
-            },
-
-            _ => Err( Error::new( ErrorKind::Other, "unimplemented segment" ) )
+            }
         }
     }
 }

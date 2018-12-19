@@ -1,3 +1,4 @@
+use std::process::ExitStatus;
 use std::os::unix::process::ExitStatusExt;
 
 pub fn clear_screen() {

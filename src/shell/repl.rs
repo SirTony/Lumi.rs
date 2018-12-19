@@ -92,7 +92,7 @@ impl<'a> Repl<'a> {
 
             PromptStyle::Linux => {
                 let username = self.paint( ColorSpace::User( username() ) );
-                let machine  = self.paint( ColorSpace::User( computer() ) );
+                let machine  = self.paint( ColorSpace::Machine( computer() ) );
 
                 print!( "{0}@{1}:{2}$ ", username, machine, self.paint( get_current_dir( true ) ) );
             }
