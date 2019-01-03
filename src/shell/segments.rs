@@ -12,6 +12,10 @@ pub struct ShellResult {
 }
 
 impl ShellResult {
+    pub fn code( &self ) -> Option<i32> {
+        self.code
+    }
+
     pub fn ok() -> Result<ShellResult> {
         Ok( ShellResult {
             code: Some( 0 ),
@@ -29,21 +33,55 @@ impl ShellResult {
     }
 }
 
+macro_rules! ensure_result {
+    ( $r: expr ) => {{
+        if $r.code().is_none() || $r.code().unwrap() != 0 {
+            return Ok( $r );
+        }
+    }}
+}
+
+#[derive( Debug )]
+pub enum RedirectMode {
+    StdIn,
+    StdOut,
+    StdErr,
+    StdBoth,
+}
+
 #[derive( Debug )]
 pub enum ShellSegment {
+    Empty,
     Text( String ),
-    Command( String, Option<Vec<Box<ShellSegment>>> ),
-    Interp( Box<ShellSegment> ),
+    Command( Box<ShellSegment>, Option<Vec<ShellSegment>> ),
+    StringInterp( Vec<ShellSegment> ),
+    CmdInterp( Box<ShellSegment> ),
     Pipe( Box<ShellSegment>, Box<ShellSegment> ),
     Seq( bool, Box<ShellSegment>, Box<ShellSegment> ),
     Var( String ),
+    Redirect( Box<ShellSegment>, Box<ShellSegment>, RedirectMode ),
 }
 
 impl ShellSegment {
     pub fn execute( &self, capture: bool, input: Option<Vec<String>> ) -> Result<ShellResult> {
         match self {
+            ShellSegment::Empty => ShellResult::ok(),
             ShellSegment::Text( s ) => ShellResult::ok_with_text( s.clone() ),
-            ShellSegment::Interp( seg ) => seg.execute( true, None ),
+            ShellSegment::CmdInterp( seg ) => seg.execute( true, None ),
+            ShellSegment::StringInterp( segs ) => {
+                let mut parts = Vec::new();
+                for seg in segs {
+                    let res = seg.execute( true, None )?;
+                    ensure_result!( res );
+
+                    if let Some( mut lines ) = res.stdout {
+                        parts.append( &mut lines );
+                    }
+                }
+
+                ShellResult::ok_with_text( parts.join( "" ) )
+
+            },
             ShellSegment::Seq( safe, left, right ) =>
             if *safe {
                 let left = left.execute( capture, None )?;
@@ -64,6 +102,17 @@ impl ShellSegment {
                 }
 
                 Ok( left )
+            },
+            ShellSegment::Redirect( left, right, mode ) => {
+                let right = right.execute( true, None )?;
+                ensure_result!( right );
+
+                let left = left.execute( true, input )?;
+                ensure_result!( left );
+
+                // TODO: finish implementing this
+
+                ShellResult::ok()
             },
             ShellSegment::Var( name ) => {
                 match input {
@@ -94,8 +143,11 @@ impl ShellSegment {
                 }
             },
             ShellSegment::Command( cmd, args ) => {
-                let mut proc = Command::new( cmd );
+                let res = cmd.execute( true, None )?;
+                ensure_result!( res );
 
+                let name = format!( "{}", res.stdout.unwrap().join( "" ) );
+                let mut proc = Command::new( name );
                 if input.is_some() {
                     proc.stdin( Stdio::piped() );
                 } else {

@@ -2,8 +2,11 @@ use yansi::Paint;
 use std::env::current_dir;
 use std::io::{ Result, Error, ErrorKind, Write, stdin, stdout };
 use std::fmt::Display;
-use shell::config::{ Config, ColorSpace, PromptStyle };
-use kernel::disable_ctrl_c;
+use shell::config::{ Config, ColorSpace, ColorPalette, PromptStyle };
+use kernel::{ clear_screen, disable_ctrl_c };
+use shell::parsing::*;
+use shell::parsing::ParseError;
+use crossterm::terminal;
 
 pub struct Repl<'a> {
     config: &'a Config
@@ -17,10 +20,13 @@ impl<'a> Repl<'a> {
     }
 
     pub fn run( &self ) {
-        unsafe { disable_ctrl_c(); }
+        if self.config.palette().is_some() && cfg!( windows ) {
+            ColorPalette::enable_windows_ascii();
+        }
 
-        if let Some( palette ) = self.config.palette() {
-            palette.apply();
+        unsafe {
+            disable_ctrl_c();
+            clear_screen();
         }
 
         loop {
@@ -29,14 +35,160 @@ impl<'a> Repl<'a> {
             let mut line = String::new();
             match stdin().read_line( &mut line ) {
                 Ok( _ ) => {
-                    // just echo for now
-                    println!( "{0}", line );
+                    if line.trim().len() == 0 {
+                        println!( "" );
+                        continue;
+                    }
+
+                    line = line.trim_end_matches( '\r' ).to_string();
+                    let mut lexer = ShellLexer::new( line.clone() );
+                    let tokens = match lexer.tokenize() {
+                        Ok( tks ) => tks,
+                        Err( e ) => {
+                            self.show_lex_error( e, &line );
+                            continue;
+                        },
+                    };
+
+                    let mut parser = ShellParser::new( tokens );
+                    let seg = match parser.parse_all() {
+                        Ok( seg ) => seg,
+                        Err( e ) => {
+                            self.show_parse_error( e, &line );
+                            continue;
+                        },
+                    };
+
+                    let res = seg.execute( false, None );
+                    println!( "{:#?}", res.unwrap() );
                 },
                 Err( e ) => {
                     self.error( format!( "unable to read from STDIN (reason: {})", e.to_string() ) );
                 }
             }
         }
+    }
+
+    fn show_lex_error( &self, e: LexerError, input: &String ) {
+        use shell::parsing::LexerError::*;
+
+        match e {
+            UnexpectedChar { character, codepoint, span } => {
+                self.error(
+                    format!(
+                        "unexpected character '{0}' (0x{1:X}) at position {2}",
+                        character,
+                        codepoint,
+                        span.start.index
+                    )
+                );
+
+                self.point_to( input, span.start.index );
+            },
+
+            UnexpectedEOI { reason, span } => {
+                self.error(
+                    format!(
+                        "unexpected end-of-input ({0}) at position {1}",
+                        reason,
+                        span.start.index
+                    )
+                );
+
+                self.point_to( input, span.start.index );
+            },
+        }
+    }
+
+    fn show_parse_error( &self, e: ParseError, input: &String ) {
+        use shell::parsing::ParseError::*;
+
+        match e {
+            ExpectSegment { found, span } => {
+                self.error(
+                    format!(
+                        "expecting shell segment, found {0} at position {1}",
+                        found,
+                        span.start.index
+                    )
+                );
+
+                self.point_to( input, span.start.index );
+            },
+
+            ExpectString { span } => {
+                self.error(
+                    format!(
+                        "redirection target must be a string or string interpolation (at position {})",
+                        span.start.index
+                    )
+                );
+
+                self.point_to( input, span.start.index );
+            },
+
+            UnexpectedEOI => {
+                self.error(
+                    format!(
+                        "unexpected end-of-input (malformed token stream, indicates an internal bug)"
+                    )
+                );
+            },
+
+            Unexpected { expect, found, span } => {
+                self.error(
+                    format!(
+                        "unexpected {0}, expecting {1} at position {2}",
+                        found,
+                        expect,
+                        span.start.index
+                    )
+                );
+
+                self.point_to( input, span.start.index );
+            }
+        }
+    }
+
+    fn point_to( &self, input: &String, at: usize ) {
+        let pad_size: usize = 10;
+        let prefix = "... ";
+        let term = terminal();
+        let ( w, _ ) = term.terminal_size();
+
+        let should_trim = at > pad_size && input.len() > w as usize;
+        let mut section = if should_trim {
+            format!(
+                "{0}{1}",
+                prefix,
+                &input[( at - pad_size )..]
+            )
+        } else {
+            input.clone()
+        };
+
+        if section.len() > w as usize {
+            let suffix = " ...";
+            section = format!(
+                "{0}{1}",
+                &input[..( w as usize - suffix.len() )],
+                suffix
+            );
+        }
+
+        let len = if should_trim {
+            pad_size + prefix.len()
+        } else {
+            at
+        };
+
+        let ws: String = ( 0 .. len ).map( | _ | ' ' ).collect();
+        let ln: String = ( 0 .. len ).map( | _ | '─' ).collect();
+
+        println!( "" );
+        println!( "{}", section );
+        println!( "{}", self.paint( ColorSpace::Error( format!( "{}^", ws ) ) ) );
+        println!( "{}", self.paint( ColorSpace::Error( format!( "{}┘", ln ) ) ) );
     }
 
     fn notice<D: Display>( &self, msg: D ) {
@@ -59,7 +211,7 @@ impl<'a> Repl<'a> {
         if let Some( palette ) = self.config.palette() {
             palette.paint( what )
         } else {
-            Paint::default( what.unwrap() )
+            Paint::new( what.unwrap() )
         }
     }
 

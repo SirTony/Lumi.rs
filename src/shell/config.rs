@@ -1,7 +1,7 @@
-use yansi::{ Paint, Color };
+use yansi::{ Style, Paint, Color };
 use std::default::Default;
 
-use kernel::clear_screen;
+use kernel::{ ColorSupport::{ Colors256, TrueColor }, get_color_support };
 
 #[derive( Debug )]
 pub enum ColorSpace<D> {
@@ -28,19 +28,19 @@ impl<D> ColorSpace<D> {
 
 #[derive( Debug )]
 pub struct ColorPalette {
-    notice: Color,
-    warning: Color,
-    error: Color,
-    dir: Color,
-    user: Color,
-    machine: Color,
+    notice: Style,
+    warning: Style,
+    error: Style,
+    dir: Style,
+    user: Style,
+    machine: Style,
 }
 
 impl ColorPalette {
-    pub fn apply( &self ) {
-        Paint::<()>::enable_windows_ascii();
-
-        unsafe{ clear_screen() }
+    #[cfg( windows )]
+    pub fn enable_windows_ascii() -> bool {
+        let support = get_color_support();
+        ( support == Colors256 || support == TrueColor ) && Paint::<()>::enable_windows_ascii()
     }
 
     pub fn paint<D>( &self, value: ColorSpace<D> ) -> Paint<D> {
@@ -53,38 +53,47 @@ impl ColorPalette {
             ColorSpace::Machine( x ) => paint( x, self.machine ),
         };
 
-        fn paint<D>( x: D, c: Color ) -> Paint<D> {
-            Paint::new( x ).fg( c ).bg( Color::Unset )
+        fn paint<D>( x: D, s: Style ) -> Paint<D> {
+            Paint::new( x ).with_style( s )
         }
     }
 }
 
 impl Default for ColorPalette {
     fn default() -> Self {
-        // TODO: should have more advanced testing, specifically so
-        //       RGB and 256 color works on Linux too.
-        //       color depth testing should also probably be moved to the kernel module.
-        //
-        //       should also consider turning this to a yansi::Style struct
-        //       so colours can be dimmed when not in RGB mode
-        if Paint::<()>::enable_windows_ascii() {
+        // TODO: implement colour support testing for linux
+        //       also implement a 256 colour variation
+
+        let rgb = || {
             ColorPalette {
-                notice: Color::RGB( 29, 136, 241 ),
-                warning: Color::RGB( 249, 184, 22 ),
-                error: Color::RGB( 255, 67, 131 ),
-                dir: Color::RGB( 248, 176, 104 ),
-                user: Color::RGB( 80, 177, 255 ),
-                machine: Color::RGB( 255, 0, 255 ),
+                notice: Style::new( Color::RGB( 29, 136, 241 ) ),
+                warning: Style::new( Color::RGB( 249, 184, 22 ) ),
+                error: Style::new( Color::RGB( 255, 67, 131 ) ),
+                dir: Style::new( Color::RGB( 248, 176, 104 ) ),
+                user: Style::new( Color::RGB( 80, 177, 255 ) ),
+                machine: Style::new( Color::RGB( 255, 0, 255 ) ),
+            }
+        };
+
+        let simple = || {
+            ColorPalette {
+                notice: Style::new( Color::Cyan ),
+                warning: Style::new( Color::Yellow ),
+                error: Style::new( Color::Red ),
+                dir: Style::new( Color::Cyan ).dimmed(),
+                user: Style::new( Color::Green ),
+                machine: Style::new( Color::Yellow ).dimmed(),
+            }
+        };
+
+        if cfg!( windows ) {
+            if ColorPalette::enable_windows_ascii() {
+                rgb()
+            } else {
+                simple()
             }
         } else {
-            ColorPalette {
-                notice: Color::Cyan,
-                warning: Color::Yellow,
-                error: Color::Red,
-                dir: Color::Cyan,
-                user: Color::Green,
-                machine: Color::Yellow,
-            }
+            simple()
         }
     }
 }

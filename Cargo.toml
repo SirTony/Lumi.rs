@@ -4,11 +4,14 @@ version = "0.1.0"
 authors = [ "Tony J. Hudgins <js.pwns@gmail.com>" ]
 
 [dependencies]
-pest = "2.0.2"
+failure = "0.1.5"
 clap = "2.32.0"
 yansi = "0.5.0"
 whoami = "0.2.4"
 dirs = "1.0.4"
+atty = "0.2.11"
+crossterm = "0.5.1"
 
 [target.'cfg(windows)'.dependencies]
+winreg = "0.6.0"
 winapi = { version = "0.3.6", features = [ "wincon", "processenv", "winbase", "handleapi" ] }
