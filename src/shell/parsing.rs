@@ -358,7 +358,7 @@ impl ShellParser {
                     let seg = self.with_commands( | p | p.parse( Precedence::Invalid ) )?;
                     self.tokens.consume_a( &RParen )?;
 
-                    ShellSegment::CmdInterp( Box::new( seg ) )
+                    ShellSegment::CmdInterp { cmd: seg.into() }
                 } else {
                     let tk = self.tokens.consume_a( &String( std::string::String::new() ) )?;
                     let name = match tk.kind() {
@@ -366,7 +366,7 @@ impl ShellParser {
                         _ => unreachable!()
                     };
 
-                    ShellSegment::Var( name.clone() )
+                    ShellSegment::Var { name: name.clone() }
                 }
             },
             _ => return Err( ParseError::expect_segment(
@@ -380,15 +380,26 @@ impl ShellParser {
             left = match tk.kind() {
                 Amp => {
                     let right = self.parse( Precedence::Seq )?;
-                    ShellSegment::Seq( true, Box::new( left ), Box::new( right ) )
+                    ShellSegment::Seq {
+                        safe: true,
+                        left: left.into(),
+                        right: right.into(),
+                    }
                 },
                 Semi => {
                     let right = self.parse( Precedence::Seq )?;
-                    ShellSegment::Seq( false, Box::new( left ), Box::new( right ) )
+                    ShellSegment::Seq {
+                        safe: false,
+                        left: left.into(),
+                        right: right.into(),
+                    }
                 },
                 Pipe => {
                     let right = self.parse( Precedence::Pipe )?;
-                    ShellSegment::Pipe( Box::new( left ), Box::new( right ) )
+                    ShellSegment::Pipe {
+                        left: left.into(),
+                        right: right.into(),
+                    }
                 },
                 StdIn => self.parse_redirect( left, tk )?,
                 StdOut => self.parse_redirect( left, tk )?,
@@ -457,7 +468,7 @@ impl ShellParser {
     }
 
     fn parse_string( &mut self, s: &String ) -> Result<ShellSegment, ParseError> {
-        let seg = ShellSegment::Text( s.clone() );
+        let seg = ShellSegment::Text { text: s.clone() };
 
         if !self.parse_commands {
             Ok( seg )
@@ -470,7 +481,7 @@ impl ShellParser {
         let mut segs = Vec::new();
         for tk in tks {
             let seg = match tk.kind() {
-                ShellTokenKind::String( s ) => Ok( ShellSegment::Text( s.clone() ) ),
+                ShellTokenKind::String( s ) => Ok( ShellSegment::Text { text: s.clone() } ),
                 ShellTokenKind::Interp( tks ) => {
                     let mut parser = ShellParser::new( tks.clone() );
                     parser.parse_all()
@@ -481,7 +492,7 @@ impl ShellParser {
             segs.push( seg );
         }
 
-        let seg = ShellSegment::StringInterp( segs );
+        let seg = ShellSegment::StringInterp { parts: segs };
 
         if !self.parse_commands {
             Ok( seg )
@@ -498,9 +509,15 @@ impl ShellParser {
         }
 
         if segs.len() == 0 {
-            Ok( ShellSegment::Command( Box::new( seg ), None ) )
+            Ok( ShellSegment::Command {
+                cmd: seg.into(),
+                args: None,
+            } )
         } else {
-            Ok( ShellSegment::Command( Box::new( seg ), Some( segs ) ) )
+            Ok( ShellSegment::Command {
+                cmd: seg.into(),
+                args: Some( segs ),
+            } )
         }
     }
 
@@ -513,8 +530,8 @@ impl ShellParser {
         let right = self.without_commands( | p | p.parse( Precedence::Redir ) )?;
         println!( "{:#?}", &right );
         let valid = match right {
-            ShellSegment::Text( _ ) => true,
-            ShellSegment::StringInterp( _ ) => true,
+            ShellSegment::Text { text: _ } => true,
+            ShellSegment::StringInterp { parts: _ } => true,
             _ => false,
         };
 
@@ -530,6 +547,10 @@ impl ShellParser {
             _ => unreachable!(),
         };
 
-        Ok( ShellSegment::Redirect( Box::new( left ), Box::new( right ), mode ) )
+        Ok( ShellSegment::Redirect {
+            left: left.into(),
+            right: right.into(),
+            mode
+        } )
     }
 }

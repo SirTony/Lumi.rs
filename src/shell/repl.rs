@@ -20,16 +20,18 @@ impl<'a> Repl<'a> {
     }
 
     pub fn run( &self ) {
-        if self.config.palette().is_some() && cfg!( windows ) {
-            ColorPalette::enable_windows_ascii();
-        }
-
         unsafe {
             disable_ctrl_c();
             clear_screen();
         }
 
         loop {
+            // for some reason coloration using ASCII escape codes breaks after every
+            // segment execution, meaning we have to re-enable it on every loop.
+            if self.config.palette().is_some() && cfg!( windows ) {
+                ColorPalette::enable_windows_ascii();
+            }
+
             self.print_prompt();
 
             let mut line = String::new();
@@ -40,7 +42,7 @@ impl<'a> Repl<'a> {
                         continue;
                     }
 
-                    line = line.trim_end_matches( '\r' ).to_string();
+                    line = line.trim_end_matches( | c | c == '\r' || c == '\n' ).to_string();
                     let mut lexer = ShellLexer::new( line.clone() );
                     let tokens = match lexer.tokenize() {
                         Ok( tks ) => tks,
@@ -60,7 +62,8 @@ impl<'a> Repl<'a> {
                     };
 
                     let res = seg.execute( false, None );
-                    println!( "{:#?}", res.unwrap() );
+                    println!( "{:#?}", res );
+                    stdout().flush().unwrap();
                 },
                 Err( e ) => {
                     self.error( format!( "unable to read from STDIN (reason: {})", e.to_string() ) );
@@ -189,6 +192,7 @@ impl<'a> Repl<'a> {
         println!( "{}", section );
         println!( "{}", self.paint( ColorSpace::Error( format!( "{}^", ws ) ) ) );
         println!( "{}", self.paint( ColorSpace::Error( format!( "{}┘", ln ) ) ) );
+        stdout().flush().unwrap();
     }
 
     fn notice<D: Display>( &self, msg: D ) {
@@ -205,6 +209,7 @@ impl<'a> Repl<'a> {
 
     fn msg<D: Display, T: Display>( &self, tag: ColorSpace<T>, msg: D ) {
         println!( "[{0}] :: {1}", self.paint( tag ), msg );
+        stdout().flush().unwrap();
     }
 
     fn paint<D>( &self, what: ColorSpace<D> ) -> Paint<D> {
