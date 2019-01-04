@@ -35,13 +35,65 @@ impl Display for TextSpan {
 }
 
 #[derive( Debug )]
-pub enum ParseError {
+pub enum ParseErrorKind {
     UnexpectedEOI,
     Unexpected {
         expect: String,
         found: String,
-        span: TextSpan,
     },
+    ExpectSegment { found: String },
+    ExpectString,
+}
+
+#[derive( Debug )]
+pub struct ParseError {
+    kind: ParseErrorKind,
+    span: Option<TextSpan>,
+}
+
+impl ParseError {
+    pub fn new( kind: ParseErrorKind, span: Option<TextSpan> ) -> ParseError {
+        ParseError { kind, span }
+    }
+
+    pub fn kind( &self ) -> &ParseErrorKind {
+        &self.kind
+    }
+
+    pub fn span( &self ) -> Option<&TextSpan> {
+        match self.span {
+            Some( ref x ) => Some( x ),
+            None => None,
+        }
+    }
+
+    pub fn unexpected_eoi() -> ParseError {
+        ParseError::new( ParseErrorKind::UnexpectedEOI, None )
+    }
+
+    pub fn unexpected( expect: String, found: String, span: TextSpan ) -> ParseError {
+        ParseError::new(
+            ParseErrorKind::Unexpected {
+                expect,
+                found,
+            },
+            Some( span )
+        )
+    }
+
+    pub fn expect_segment( found: String, span: TextSpan ) -> ParseError {
+        ParseError::new(
+            ParseErrorKind::ExpectSegment { found },
+            Some( span )
+        )
+    }
+
+    pub fn expect_string( span: TextSpan ) -> ParseError {
+        ParseError::new(
+            ParseErrorKind::ExpectString,
+            Some( span )
+        )
+    }
 }
 
 pub struct TokenStream<T> {
@@ -83,7 +135,7 @@ impl<T: SyntaxToken + ToString + Debug> TokenStream<T>
     pub fn consume( &mut self ) -> Result<T, ParseError> {
         match self.tokens.consume() {
             Some( x ) => Ok( x ),
-            None => Err( ParseError::UnexpectedEOI )
+            None => Err( ParseError::unexpected_eoi() )
         }
     }
 
@@ -92,12 +144,60 @@ impl<T: SyntaxToken + ToString + Debug> TokenStream<T>
         if discriminant( tk.kind() ) == discriminant( what ) {
             Ok( tk )
         } else {
-            Err( ParseError::Unexpected {
-                expect: what.to_string(),
-                found: tk.to_string(),
-                span: tk.span().clone()
-            } )
+            Err( ParseError::unexpected(
+                what.to_string(),
+                tk.to_string(),
+                tk.span().clone()
+            ) )
         }
+    }
+}
+
+#[derive( Debug )]
+pub enum LexErrorKind {
+    UnexpectedChar {
+        character: char,
+        codepoint: u16,
+    },
+    UnexpectedEOI {
+        reason: &'static str,
+    },
+}
+
+#[derive( Debug )]
+pub struct LexError {
+    kind: LexErrorKind,
+    span: TextSpan,
+}
+
+impl LexError {
+    pub fn new( kind: LexErrorKind, span: TextSpan ) -> LexError {
+        LexError { kind, span }
+    }
+
+    pub fn kind( &self ) -> &LexErrorKind {
+        &self.kind
+    }
+
+    pub fn span( &self ) -> &TextSpan {
+        &self.span
+    }
+
+    pub fn unexpected_char( c: char, span: TextSpan ) -> LexError {
+        LexError::new(
+            LexErrorKind::UnexpectedChar {
+                character: c,
+                codepoint: c as u16,
+            },
+            span
+        )
+    }
+
+    pub fn unexpected_eoi( reason: &'static str, span: TextSpan ) -> LexError {
+        LexError::new(
+            LexErrorKind::UnexpectedEOI { reason },
+            span
+        )
     }
 }
 

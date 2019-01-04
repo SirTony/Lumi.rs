@@ -5,7 +5,7 @@ use std::fmt::Display;
 use shell::config::{ Config, ColorSpace, ColorPalette, PromptStyle };
 use kernel::{ clear_screen, disable_ctrl_c };
 use shell::parsing::*;
-use shell::parsing::ParseError;
+use parsing::*;
 use crossterm::terminal;
 
 pub struct Repl<'a> {
@@ -69,62 +69,62 @@ impl<'a> Repl<'a> {
         }
     }
 
-    fn show_lex_error( &self, e: LexerError, input: &String ) {
-        use shell::parsing::LexerError::*;
+    fn show_lex_error( &self, e: LexError, input: &String ) {
+        use parsing::LexErrorKind::*;
 
-        match e {
-            UnexpectedChar { character, codepoint, span } => {
+        match e.kind() {
+            UnexpectedChar { character, codepoint } => {
                 self.error(
                     format!(
                         "unexpected character '{0}' (0x{1:X}) at position {2}",
                         character,
                         codepoint,
-                        span.start.index
+                        e.span().start.index
                     )
                 );
 
-                self.point_to( input, span.start.index );
+                self.point_to( input, e.span().start.index );
             },
 
-            UnexpectedEOI { reason, span } => {
+            UnexpectedEOI { reason } => {
                 self.error(
                     format!(
                         "unexpected end-of-input ({0}) at position {1}",
                         reason,
-                        span.start.index
+                        e.span().start.index
                     )
                 );
 
-                self.point_to( input, span.start.index );
+                self.point_to( input, e.span().start.index );
             },
         }
     }
 
     fn show_parse_error( &self, e: ParseError, input: &String ) {
-        use shell::parsing::ParseError::*;
+        use parsing::ParseErrorKind::*;
 
-        match e {
-            ExpectSegment { found, span } => {
+        match e.kind() {
+            ExpectSegment { found } => {
                 self.error(
                     format!(
                         "expecting shell segment, found {0} at position {1}",
                         found,
-                        span.start.index
+                        e.span().unwrap().start.index
                     )
                 );
 
-                self.point_to( input, span.start.index );
+                self.point_to( input, e.span().unwrap().start.index );
             },
 
-            ExpectString { span } => {
+            ExpectString => {
                 self.error(
                     format!(
                         "redirection target must be a string or string interpolation (at position {})",
-                        span.start.index
+                        e.span().unwrap().start.index
                     )
                 );
 
-                self.point_to( input, span.start.index );
+                self.point_to( input, e.span().unwrap().start.index );
             },
 
             UnexpectedEOI => {
@@ -135,17 +135,17 @@ impl<'a> Repl<'a> {
                 );
             },
 
-            Unexpected { expect, found, span } => {
+            Unexpected { expect, found } => {
                 self.error(
                     format!(
                         "unexpected {0}, expecting {1} at position {2}",
                         found,
                         expect,
-                        span.start.index
+                        e.span().unwrap().start.index
                     )
                 );
 
-                self.point_to( input, span.start.index );
+                self.point_to( input, e.span().unwrap().start.index );
             }
         }
     }

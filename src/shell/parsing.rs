@@ -1,4 +1,4 @@
-use parsing::{ self, * };
+use parsing::*;
 use std::mem::discriminant;
 use std::string::ToString;
 use shell::segments::{ ShellSegment, RedirectMode };
@@ -87,20 +87,6 @@ pub struct ShellLexer {
     punct: HashMap<&'static str, ShellTokenKind>,
 }
 
-#[derive( Debug )]
-pub enum LexerError {
-    UnexpectedChar {
-        character: char,
-        codepoint: u16,
-        span: TextSpan,
-    },
-
-    UnexpectedEOI {
-        reason: &'static str,
-        span: TextSpan,
-    },
-}
-
 #[derive( Debug, Clone, Eq, PartialEq )]
 enum LexerMode {
     Normal,
@@ -147,7 +133,7 @@ impl ShellLexer {
         }
     }
 
-    pub fn tokenize( &mut self ) -> Result<Vec<ShellToken>, LexerError> {
+    pub fn tokenize( &mut self ) -> Result<Vec<ShellToken>, LexError> {
         let tokenizers = &[
             ShellLexer::try_lex_quoted,
             ShellLexer::try_lex_punct,
@@ -176,11 +162,7 @@ impl ShellLexer {
 
             if !found {
                 self.scanner.push_mark();
-                return Err( LexerError::UnexpectedChar {
-                    character: c,
-                    codepoint: c as u16,
-                    span: self.scanner.pop_span().unwrap(),
-                } );
+                return Err( LexError::unexpected_char( c, self.scanner.pop_span().unwrap() ) );
             }
         }
 
@@ -194,7 +176,7 @@ impl ShellLexer {
         Ok( tokens )
     }
 
-    fn try_lex_unquoted( &mut self, c: char ) -> Result<Option<ShellToken>, LexerError> {
+    fn try_lex_unquoted( &mut self, c: char ) -> Result<Option<ShellToken>, LexError> {
         let special = &self.special;
         if c.is_whitespace() || c.is_control() || special.contains( &c ) {
             return Ok( None );
@@ -209,7 +191,7 @@ impl ShellLexer {
         } ) )
     }
 
-    fn try_lex_quoted( &mut self, c: char ) -> Result<Option<ShellToken>, LexerError> {
+    fn try_lex_quoted( &mut self, c: char ) -> Result<Option<ShellToken>, LexError> {
         if c != '"' && c != '\'' && c != '`' {
             return Ok( None );
         }
@@ -265,10 +247,10 @@ impl ShellLexer {
 
                     let tks = interp.tokenize()?;
                     if interp.scanner.is_empty() || interp.scanner.consume().unwrap() != '}' {
-                        return Err( LexerError::UnexpectedEOI {
-                            reason: "string interpolation does not terminate",
-                            span: self.scanner.pop_span().unwrap(),
-                        }.into() );
+                        return Err( LexError::unexpected_eoi(
+                            "string interpolation does not terminate",
+                            self.scanner.pop_span().unwrap(),
+                        ) );
                     }
 
                     let tk = ShellToken {
@@ -285,10 +267,10 @@ impl ShellLexer {
         }
 
         if self.scanner.is_empty() || self.scanner.consume().unwrap() != term {
-            return Err( LexerError::UnexpectedEOI {
-                reason: "string does not terminate",
-                span: self.scanner.pop_span().unwrap(),
-            }.into() );
+            return Err( LexError::unexpected_eoi(
+                "string does not terminate",
+                self.scanner.pop_span().unwrap(),
+            ) );
         }
 
         let is_interp = tokens.len() > 0;
@@ -312,7 +294,7 @@ impl ShellLexer {
         } ) )
     }
 
-    fn try_lex_punct( &mut self, _: char ) -> Result<Option<ShellToken>, LexerError> {
+    fn try_lex_punct( &mut self, _: char ) -> Result<Option<ShellToken>, LexError> {
         self.scanner.push_mark();
         for ( k, v ) in &self.punct {
             if self.scanner.take_if_next( k ).is_some() {
@@ -326,33 +308,6 @@ impl ShellLexer {
 
         self.scanner.pop_mark();
         Ok( None )
-    }
-}
-
-#[derive( Debug )]
-pub enum ParseError {
-    ExpectSegment{
-        found: String,
-        span: TextSpan,
-    },
-    ExpectString { span: TextSpan },
-    UnexpectedEOI,
-    Unexpected {
-        expect: String,
-        found: String,
-        span: TextSpan,
-    },
-}
-
-impl std::convert::From<parsing::ParseError> for ParseError {
-    fn from( e: parsing::ParseError ) -> ParseError {
-        use parsing::ParseError::*;
-
-        match e {
-            UnexpectedEOI => ParseError::UnexpectedEOI,
-            Unexpected { expect, found, span } =>
-                ParseError::Unexpected { expect, found, span },
-        }
     }
 }
 
@@ -414,10 +369,10 @@ impl ShellParser {
                     ShellSegment::Var( name.clone() )
                 }
             },
-            _ => return Err( ParseError::ExpectSegment {
-                found: tk.to_string(),
-                span: tk.span().clone()
-            }.into() )
+            _ => return Err( ParseError::expect_segment(
+                tk.to_string(),
+                tk.span().clone()
+            ) )
         };
 
         while prec < get_prec( self.tokens.peek() ) {
@@ -564,7 +519,7 @@ impl ShellParser {
         };
 
         if !valid {
-            return Err( ParseError::ExpectString { span } )
+            return Err( ParseError::expect_string( span ) )
         }
 
         let mode = match tk.kind() {
