@@ -221,7 +221,7 @@ impl<'a> Repl<'a> {
     }
 
     fn print_prompt( &self ) {
-        use whoami::{ username, computer };
+        use whoami::{ username, host as computer };
 
         fn get_current_dir( use_tilde: bool ) -> ColorSpace<String> {
             let full_path = Repl::current_dir( use_tilde ).unwrap();

@@ -528,7 +528,6 @@ impl ShellParser {
         };
 
         let right = self.without_commands( | p | p.parse( Precedence::Redir ) )?;
-        println!( "{:#?}", &right );
         let valid = match right {
             ShellSegment::Text { text: _ } => true,
             ShellSegment::StringInterp { parts: _ } => true,
