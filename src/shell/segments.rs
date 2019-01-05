@@ -2,7 +2,7 @@ use std::io::{ BufRead, BufReader, Read, Write, Result, Error, ErrorKind };
 use std::boxed::Box;
 use std::fs::File;
 use std::path::Path;
-use std::process::{ Command, Stdio };
+use std::process::{ Command, Child, Stdio };
 use std::env::{ VarError, var, set_var };
 use kernel::get_exit_code;
 
@@ -204,22 +204,11 @@ impl ShellSegment {
                 }
             },
             ShellSegment::Command { cmd, args } => {
-
-                /*
-                    ============
-                    = ! TODO ! =
-                    ============
-
-                    launching a subprocess with Command has some weird behaviour with
-                    inheriting the standard streams, causing output from things like 'echo'
-                    and 'cat' to render to the terminal window incorrectly.
-                */
-
                 let res = cmd.execute( true, None )?;
                 ensure_result!( res );
 
                 let name = format!( "{}", res.stdout.unwrap().join( "" ) );
-                let mut proc = Command::new( name );
+                let mut proc = Command::new( &name );
                 if input.is_some() {
                     proc.stdin( Stdio::piped() );
                 }
@@ -230,71 +219,118 @@ impl ShellSegment {
                 }
 
                 if let Some( args ) = args {
-                    for x in args.into_iter() {
+                    for x in args.iter() {
                         if let Some( lines ) = x.execute( true, None )?.stdout {
                             for line in lines { proc.arg( line ); }
                         }
                     }
                 }
 
-                let mut child = proc.spawn()?;
                 if let Some( lines ) = input {
-                    for line in lines {
-                        writeln!( child.stdin.as_mut().unwrap(), "{}", line )?;
-                    }
-                }
-
-                if capture {
-                    Ok( ShellResult {
-                        code: get_exit_code( child.wait()? ),
-                        stdout:
-                        if let Some( mut stdout ) = child.stdout {
-                            let mut buf = String::new();
-                            let sz = stdout.read_to_string( &mut buf )?;
-
-                            if sz > 0 {
-                                Some(
-                                    buf.split( "\n" )
-                                    .map( | x | x.trim() )
-                                    .filter( | x | x.len() > 0 )
-                                    .map( | x | x.to_string() )
-                                    .collect()
-                                    )
-                            } else {
-                                None
+                    if lines.len() > 0 {
+                        let mut child = proc.spawn()?;
+                        {
+                            let stdin = child.stdin.as_mut();
+                            if let Some( stdin ) = stdin {
+                                for line in lines {
+                                    writeln!( stdin, "{}", line )?;
+                                }
                             }
-                        } else {
-                            None
-                        },
-                        stderr:
-                        if let Some( mut stderr ) = child.stderr {
-                            let mut buf = String::new();
-                            let sz = stderr.read_to_string( &mut buf )?;
-
-                            if sz > 0 {
-                                Some(
-                                    buf.split( "\n" )
-                                    .map( | x | x.trim() )
-                                    .filter( | x | x.len() > 0 )
-                                    .map( | x | x.to_string() )
-                                    .collect()
-                                )
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
                         }
-                    } )
+
+                        if capture {
+                            ShellSegment::read_child( &mut child )
+                        } else {
+                            ShellSegment::get_status( &mut proc )
+                        }
+                    } else {
+                        if capture {
+                            ShellSegment::read_command( &mut proc )
+                        } else {
+                            ShellSegment::get_status( &mut proc )
+                        }
+                    }
                 } else {
-                    let status = proc.spawn()?.wait()?;
-                    Ok( ShellResult {
-                        code: get_exit_code( status ),
-                        stdout: None,
-                        stderr: None
-                    } )
+                    if capture {
+                        ShellSegment::read_command( &mut proc )
+                    } else {
+                        ShellSegment::get_status( &mut proc )
+                    }
                 }
             }
         }
+    }
+
+    fn read_command( proc: &mut Command ) -> Result<ShellResult> {
+        let res = proc.output()?;
+        Ok( ShellResult {
+            code: get_exit_code( res.status ),
+            stdout: if res.stdout.len() > 0 {
+                Some(
+                    ShellSegment::split_lines(
+                        String::from_utf8_lossy( &res.stdout ).into_owned()
+                    )
+                )
+            } else {
+                None
+            },
+            stderr: if res.stderr.len() > 0 {
+                Some(
+                    ShellSegment::split_lines(
+                        String::from_utf8_lossy( &res.stderr ).into_owned()
+                    )
+                )
+            } else {
+                None
+            }
+        } )
+    }
+
+    fn get_status( proc: &mut Command ) -> Result<ShellResult> {
+        Ok( ShellResult {
+            code: get_exit_code( proc.status()? ),
+            stdout: None,
+            stderr: None
+        } )
+    }
+
+    fn split_lines( buf: String ) -> Vec<String> {
+        buf.split( "\n" )
+        .map( | x | x.trim() )
+        .filter( | x | x.len() > 0 )
+        .map( | x | x.to_string() )
+        .collect()
+    }
+
+    fn read_child( child: &mut Child ) -> Result<ShellResult> {
+        Ok( ShellResult {
+            code: get_exit_code( child.wait()? ),
+            stdout:
+            if let Some( mut stdout ) = child.stdout.take() {
+                let mut buf = String::new();
+                let sz = stdout.read_to_string( &mut buf )?;
+
+                if sz > 0 {
+                    Some( ShellSegment::split_lines( buf ) )
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+            stderr:
+            if let Some( mut stderr ) = child.stderr.take() {
+                let mut buf = String::new();
+                let sz = stderr.read_to_string( &mut buf )?;
+
+                if sz > 0 {
+                    Some( ShellSegment::split_lines( buf ) )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } )
     }
 }
