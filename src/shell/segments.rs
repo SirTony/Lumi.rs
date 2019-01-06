@@ -78,6 +78,99 @@ pub enum ShellSegment {
     },
 }
 
+enum SubProcess {
+    Spawned {
+        process: Child,
+        capture: bool,
+    },
+
+    Waiting {
+        process: Command,
+        capture: bool,
+    }
+}
+
+impl SubProcess {
+    pub fn result( self ) -> Result<ShellResult> {
+        use self::SubProcess::*;
+
+        match self {
+            Spawned { mut process, capture: true } => SubProcess::read_child( &mut process ),
+            Spawned { mut process, capture: false } => Ok( ShellResult {
+                code: get_exit_code( process.wait()? ),
+                stdout: None,
+                stderr: None,
+            } ),
+
+            Waiting { mut process, capture: true } => SubProcess::read_command( &mut process ),
+            Waiting { mut process, capture: false } => Ok( ShellResult {
+                code: get_exit_code( process.status()? ),
+                stdout: None,
+                stderr: None,
+            } )
+        }
+    }
+
+    fn read_command( proc: &mut Command ) -> Result<ShellResult> {
+        let res = proc.output()?;
+        Ok( ShellResult {
+            code: get_exit_code( res.status ),
+            stdout: if res.stdout.len() > 0 {
+                let buf = String::from_utf8_lossy( &res.stdout ).into_owned();
+                Some( SubProcess::split_lines( buf ) )
+            } else {
+                None
+            },
+            stderr: if res.stderr.len() > 0 {
+                let buf = String::from_utf8_lossy( &res.stderr ).into_owned();
+                Some( SubProcess::split_lines( buf ) )
+            } else {
+                None
+            }
+        } )
+    }
+
+    fn split_lines( buf: String ) -> Vec<String> {
+        buf.split( "\n" )
+        .map( | x | x.trim() )
+        .filter( | x | x.len() > 0 )
+        .map( | x | x.to_string() )
+        .collect()
+    }
+
+    fn read_child( child: &mut Child ) -> Result<ShellResult> {
+        Ok( ShellResult {
+            code: get_exit_code( child.wait()? ),
+            stdout:
+            if let Some( mut stdout ) = child.stdout.take() {
+                let mut buf = String::new();
+                let sz = stdout.read_to_string( &mut buf )?;
+
+                if sz > 0 {
+                    Some( SubProcess::split_lines( buf ) )
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+            stderr:
+            if let Some( mut stderr ) = child.stderr.take() {
+                let mut buf = String::new();
+                let sz = stderr.read_to_string( &mut buf )?;
+
+                if sz > 0 {
+                    Some( SubProcess::split_lines( buf ) )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } )
+    }
+}
+
 impl ShellSegment {
     pub fn execute( &self, capture: bool, input: Option<Vec<String>> ) -> Result<ShellResult> {
         match self {
@@ -226,111 +319,24 @@ impl ShellSegment {
                     }
                 }
 
-                if let Some( lines ) = input {
-                    if lines.len() > 0 {
-                        let mut child = proc.spawn()?;
-                        {
-                            let stdin = child.stdin.as_mut();
-                            if let Some( stdin ) = stdin {
-                                for line in lines {
-                                    writeln!( stdin, "{}", line )?;
-                                }
+                let subprocess = if let Some( lines ) = input {
+                    let mut child = proc.spawn()?;
+                    {
+                        let stdin = child.stdin.as_mut();
+                        if let Some( stdin ) = stdin {
+                            for line in lines {
+                                writeln!( stdin, "{}", line )?;
                             }
                         }
+                    }
 
-                        if capture {
-                            ShellSegment::read_child( &mut child )
-                        } else {
-                            ShellSegment::get_status( &mut proc )
-                        }
-                    } else {
-                        if capture {
-                            ShellSegment::read_command( &mut proc )
-                        } else {
-                            ShellSegment::get_status( &mut proc )
-                        }
-                    }
+                    SubProcess::Spawned { process: child, capture }
                 } else {
-                    if capture {
-                        ShellSegment::read_command( &mut proc )
-                    } else {
-                        ShellSegment::get_status( &mut proc )
-                    }
-                }
+                    SubProcess::Waiting { process: proc, capture }
+                };
+
+                subprocess.result()
             }
         }
-    }
-
-    fn read_command( proc: &mut Command ) -> Result<ShellResult> {
-        let res = proc.output()?;
-        Ok( ShellResult {
-            code: get_exit_code( res.status ),
-            stdout: if res.stdout.len() > 0 {
-                Some(
-                    ShellSegment::split_lines(
-                        String::from_utf8_lossy( &res.stdout ).into_owned()
-                    )
-                )
-            } else {
-                None
-            },
-            stderr: if res.stderr.len() > 0 {
-                Some(
-                    ShellSegment::split_lines(
-                        String::from_utf8_lossy( &res.stderr ).into_owned()
-                    )
-                )
-            } else {
-                None
-            }
-        } )
-    }
-
-    fn get_status( proc: &mut Command ) -> Result<ShellResult> {
-        Ok( ShellResult {
-            code: get_exit_code( proc.status()? ),
-            stdout: None,
-            stderr: None
-        } )
-    }
-
-    fn split_lines( buf: String ) -> Vec<String> {
-        buf.split( "\n" )
-        .map( | x | x.trim() )
-        .filter( | x | x.len() > 0 )
-        .map( | x | x.to_string() )
-        .collect()
-    }
-
-    fn read_child( child: &mut Child ) -> Result<ShellResult> {
-        Ok( ShellResult {
-            code: get_exit_code( child.wait()? ),
-            stdout:
-            if let Some( mut stdout ) = child.stdout.take() {
-                let mut buf = String::new();
-                let sz = stdout.read_to_string( &mut buf )?;
-
-                if sz > 0 {
-                    Some( ShellSegment::split_lines( buf ) )
-                } else {
-                    None
-                }
-            } else {
-                None
-            },
-            stderr:
-            if let Some( mut stderr ) = child.stderr.take() {
-                let mut buf = String::new();
-                let sz = stderr.read_to_string( &mut buf )?;
-
-                if sz > 0 {
-                    Some( ShellSegment::split_lines( buf ) )
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } )
     }
 }
