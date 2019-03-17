@@ -8,8 +8,6 @@ use winapi::um::wincon::{
     SetConsoleCursorPosition
 };
 
-use atty::Stream;
-use winreg::{ RegKey, enums::* };
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::winbase::STD_OUTPUT_HANDLE;
 use winapi::um::processenv::GetStdHandle;
@@ -17,7 +15,6 @@ use winapi::shared::minwindef::{ DWORD, TRUE };
 use winapi::um::consoleapi::SetConsoleCtrlHandler;
 use std::process::ExitStatus;
 use empty::Empty;
-use kernel::common::{ ColorSupport, ColorSupport::* };
 
 pub unsafe fn clear_screen() {
     let zero = COORD::empty();
@@ -42,37 +39,6 @@ pub unsafe fn disable_ctrl_c() {
 
 pub fn get_exit_code( status: ExitStatus ) -> Option<i32> {
     status.code()
-}
-
-pub fn get_color_support() -> ColorSupport {
-    return if !atty::is( Stream::Stdout ) {
-        None
-    } else {
-        try_get_support().unwrap_or( Default )
-    };
-
-    fn try_get_support() -> std::io::Result<ColorSupport> {
-        // we have to fiddle with the registry because the winapi GetVersion()
-        // is deprecated since win 8.1 and there's no suitable replacement.
-        let hklm = RegKey::predef( HKEY_LOCAL_MACHINE );
-        let winnt = hklm.open_subkey( "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" )?;
-        let major: u32 = winnt.get_value( "CurrentMajorVersionNumber" )?;
-
-        if major < 10 {
-            Ok( Default )
-        } else {
-            let build_str: String = winnt.get_value( "CurrentBuildNumber" )?;
-            let build = build_str.parse::<u32>().unwrap_or( 0 );
-
-            if build >= 14931 {
-                Ok( TrueColor )
-            } else if build >= 10586 {
-                Ok( Colors256 )
-            } else {
-                Ok( Default )
-            }
-        }
-    }
 }
 
 impl Empty for CONSOLE_SCREEN_BUFFER_INFO {

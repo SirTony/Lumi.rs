@@ -1,0 +1,10 @@
+name: cd
+about: Changes the current working directory.
+
+args:
+    - DIR:
+        help: The new working directory.
+        index: 1
+        required: true
+        takes_value: true
+        multiple: false

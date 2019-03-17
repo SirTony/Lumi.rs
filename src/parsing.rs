@@ -23,6 +23,7 @@ pub struct TextSpan {
 }
 
 impl TextSpan {
+    #[allow( dead_code )]
     pub fn length( &self ) -> usize {
         self.end.index - self.start.index
     }
@@ -116,6 +117,7 @@ impl<T: SyntaxToken + ToString + Debug> TokenStream<T>
         self.tokens.peek()
     }
 
+    #[allow( dead_code )]
     pub fn peek_ahead( &mut self, distance: usize ) -> Option<&T> {
         self.tokens.peek_ahead( distance )
     }

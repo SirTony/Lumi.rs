@@ -1,7 +1,7 @@
 use parsing::*;
 use std::mem::discriminant;
 use std::string::ToString;
-use shell::segments::{ ShellSegment, RedirectMode };
+use shell::segments::*;
 use std::collections::{ HashSet, HashMap };
 
 #[derive( Debug, Clone, Eq, PartialEq, Hash )]
@@ -333,9 +333,9 @@ impl ShellParser {
         }
     }
 
-    pub fn parse_all( &mut self ) -> Result<ShellSegment, ParseError> {
+    pub fn parse_all( &mut self ) -> Result<Exec, ParseError> {
         if self.tokens.is_empty() {
-            return Ok( ShellSegment::Empty );
+            return Ok( Box::new( Empty ) );
         }
 
         let tree = self.parse( Precedence::Invalid )?;
@@ -344,12 +344,12 @@ impl ShellParser {
         Ok( tree )
     }
 
-    fn parse( &mut self, prec: Precedence ) -> Result<ShellSegment, ParseError> {
+    fn parse( &mut self, prec: Precedence ) -> Result<Exec, ParseError> {
         use ShellTokenKind::*;
 
         let mut tk = self.tokens.consume()?;
 
-        let mut left = match tk.kind() {
+        let mut left: Exec = match tk.kind() {
             String( s ) => self.parse_string( s )?,
             Interp( tks ) => self.parse_interp( tks )?,
             Dollar => {
@@ -358,7 +358,7 @@ impl ShellParser {
                     let seg = self.with_commands( | p | p.parse( Precedence::Invalid ) )?;
                     self.tokens.consume_a( &RParen )?;
 
-                    ShellSegment::CmdInterp { cmd: seg.into() }
+                    Box::new( CmdInterp( seg ) )
                 } else {
                     let tk = self.tokens.consume_a( &String( std::string::String::new() ) )?;
                     let name = match tk.kind() {
@@ -366,7 +366,7 @@ impl ShellParser {
                         _ => unreachable!()
                     };
 
-                    ShellSegment::Var { name: name.clone() }
+                    Box::new( Var( name.clone() ) )
                 }
             },
             _ => return Err( ParseError::expect_segment(
@@ -380,26 +380,26 @@ impl ShellParser {
             left = match tk.kind() {
                 Amp => {
                     let right = self.parse( Precedence::Seq )?;
-                    ShellSegment::Seq {
+                    Box::new( Seq {
                         safe: true,
-                        left: left.into(),
-                        right: right.into(),
-                    }
+                        left: left,
+                        right: right,
+                    } )
                 },
                 Semi => {
                     let right = self.parse( Precedence::Seq )?;
-                    ShellSegment::Seq {
+                    Box::new( Seq {
                         safe: false,
                         left: left.into(),
                         right: right.into(),
-                    }
+                    } )
                 },
                 Pipe => {
                     let right = self.parse( Precedence::Pipe )?;
-                    ShellSegment::Pipe {
+                    Box::new( super::segments::Pipe {
                         left: left.into(),
                         right: right.into(),
-                    }
+                    } )
                 },
                 StdIn => self.parse_redirect( left, tk )?,
                 StdOut => self.parse_redirect( left, tk )?,
@@ -432,8 +432,8 @@ impl ShellParser {
         }
     }
 
-    fn with_commands<F>( &mut self, f: F ) -> Result<ShellSegment, ParseError>
-        where F: FnOnce( &mut ShellParser ) -> Result<ShellSegment, ParseError>
+    fn with_commands<F>( &mut self, f: F ) -> Result<Exec, ParseError>
+        where F: FnOnce( &mut ShellParser ) -> Result<Exec, ParseError>
     {
         let orig = self.parse_commands;
         self.parse_commands = true;
@@ -443,8 +443,8 @@ impl ShellParser {
         res
     }
 
-    fn without_commands<F>( &mut self, f: F ) -> Result<ShellSegment, ParseError>
-        where F: FnOnce( &mut ShellParser ) -> Result<ShellSegment, ParseError>
+    fn without_commands<F>( &mut self, f: F ) -> Result<Exec, ParseError>
+        where F: FnOnce( &mut ShellParser ) -> Result<Exec, ParseError>
     {
         let orig = self.parse_commands;
         self.parse_commands = false;
@@ -467,8 +467,8 @@ impl ShellParser {
         }
     }
 
-    fn parse_string( &mut self, s: &String ) -> Result<ShellSegment, ParseError> {
-        let seg = ShellSegment::Text { text: s.clone() };
+    fn parse_string( &mut self, s: &String ) -> Result<Exec, ParseError> {
+        let seg = Box::new( Text( s.clone() ) );
 
         if !self.parse_commands {
             Ok( seg )
@@ -477,22 +477,22 @@ impl ShellParser {
         }
     }
 
-    fn parse_interp( &mut self, tks: &Vec<ShellToken> ) -> Result<ShellSegment, ParseError> {
+    fn parse_interp( &mut self, tks: &Vec<ShellToken> ) -> Result<Exec, ParseError> {
         let mut segs = Vec::new();
         for tk in tks {
-            let seg = match tk.kind() {
-                ShellTokenKind::String( s ) => Ok( ShellSegment::Text { text: s.clone() } ),
+            let seg: Exec = match tk.kind() {
+                ShellTokenKind::String( s ) => Box::new( Text( s.clone() ) ),
                 ShellTokenKind::Interp( tks ) => {
                     let mut parser = ShellParser::new( tks.clone() );
-                    parser.parse_all()
+                    parser.parse_all()?
                 },
                 _ => unreachable!(),
-            }?;
+            };
 
             segs.push( seg );
         }
 
-        let seg = ShellSegment::StringInterp { parts: segs };
+        let seg = Box::new( TextInterp( segs ) );
 
         if !self.parse_commands {
             Ok( seg )
@@ -501,7 +501,7 @@ impl ShellParser {
         }
     }
 
-    fn parse_args( &mut self, seg: ShellSegment ) -> Result<ShellSegment, ParseError> {
+    fn parse_args( &mut self, seg: Exec ) -> Result<Exec, ParseError> {
         let mut segs = Vec::new();
         while self.has_segment() {
             let seg = self.without_commands( | p | p.parse( Precedence::Cmd ) )?;
@@ -509,32 +509,30 @@ impl ShellParser {
         }
 
         if segs.len() == 0 {
-            Ok( ShellSegment::Command {
-                cmd: seg.into(),
+            Ok( Box::new( Cmd {
+                command: seg,
                 args: None,
-            } )
+            } ) )
         } else {
-            Ok( ShellSegment::Command {
-                cmd: seg.into(),
+            Ok( Box::new( Cmd {
+                command: seg,
                 args: Some( segs ),
-            } )
+            } ) )
         }
     }
 
-    fn parse_redirect( &mut self, left: ShellSegment, tk: ShellToken ) -> Result<ShellSegment, ParseError> {
+    fn parse_redirect( &mut self, left: Exec, tk: ShellToken ) -> Result<Exec, ParseError> {
         let span = match self.tokens.peek() {
             Some( tk ) => tk.span().clone(),
             None => tk.span.clone()
         };
 
         let right = self.without_commands( | p | p.parse( Precedence::Redir ) )?;
-        let valid = match right {
-            ShellSegment::Text { text: _ } => true,
-            ShellSegment::StringInterp { parts: _ } => true,
-            _ => false,
-        };
+        let is_valid =
+            right.as_any().downcast_ref::<Text>().is_some() ||
+            right.as_any().downcast_ref::<Redirect>().is_some();
 
-        if !valid {
+        if !is_valid {
             return Err( ParseError::expect_string( span ) )
         }
 
@@ -546,10 +544,6 @@ impl ShellParser {
             _ => unreachable!(),
         };
 
-        Ok( ShellSegment::Redirect {
-            left: left.into(),
-            right: right.into(),
-            mode
-        } )
+        Ok( Box::new( Redirect { left, right, mode } ) )
     }
 }
